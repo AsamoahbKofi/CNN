@@ -1,90 +1,113 @@
 import numpy as np
-class Convlayer:
-    def __init__(self, num_filters, filter_size, stride=1, padding=0):
-        self.num_filters = num_filters
-        self.filter_size = filter_size
-        self.stride = stride
-        self.padding = padding
-        self.filters = np.random.randn(num_filters, filter_size, filter_size) / filter_size**2
-        self.biases = np.zeros(num_filters)
 
-    def activation(self,x):
-        return np.maximum(0,x)
-    
-    def softmax(self, x):
-        exp_x = np.exp(x - np.max(x, axis=1, keepdims=True))
-        return exp_x / np.sum(exp_x, axis=1, keepdims=True)
-    
+class conv2d:
+    def __init__(self, weight, bias, num_filter, filter_size, neuron):
+        self.weight = weight
+        self.bias = bias
+        self.num_filter = num_filter
+        self.filter_size = filter_size
+        self.neuron = neuron
+
+    def relu_activation(self, x):
+        return np.maximum(0, x)
     
     def local_response_normalization(self, x, alpha=1e-4, beta=0.75):
-        normalized_output = (x / np.mean(x, axis=(1, 2, 3), keepdims=True)) / np.sqrt(np.sum(x**2, axis=(1, 2, 3),\
-                     keepdims=True) + alpha) ** beta
+        normalized_output = (x / np.mean(x, axis=(1, 2, 3), keepdims=True)) / np.sqrt(np.sum(x**2, axis=(1, 2, 3), keepdims=True) + alpha) ** beta
         return normalized_output
     
+    def max_pooling(self, pooling_size, output):
+        batch_size, output_height, output_width, num_channels = output.shape
+        max_pool_height = output_height // pooling_size
+        max_pool_width = output_width // pooling_size
+
+        max_pool_output = np.zeros((batch_size, max_pool_height, max_pool_width, num_channels))
+
+        for b in range(batch_size):
+            for c in range(num_channels):
+                for i in range(max_pool_height):
+                    for j in range(max_pool_width):
+                        h_start = i * pooling_size
+                        h_end = h_start + pooling_size
+                        w_start = j * pooling_size
+                        w_end = w_start + pooling_size
+                        
+                        # Extract the region for max pooling
+                        pool_region = output[b, h_start:h_end, w_start:w_end, c]
+                        # Assign the maximum value to the corresponding position in the output
+                        max_pool_output[b, i, j, c] = np.max(pool_region)
+                        
+        return max_pool_output
+    
+    def flatten(self, x):
+        return x.reshape(x.shape[0], -1)
+    
+    def softmax(self, x):
+        exp_x = np.exp(x - np.max(x, axis=1, keepdims=True))  # Stability improvement
+        return exp_x / np.sum(exp_x, axis=1, keepdims=True)
+    
+    def fully_connected_layer(self, x):
+        return np.dot(x, self.weight) + self.bias
+
     def apply_dropout(self, x, rate):
         keep_prob = 1 - rate
         mask = np.random.binomial(1, keep_prob, size=x.shape) / keep_prob
         return x * mask
 
-    
+    def forward_pass(self, image, kernel, stride, padding):
+        batch_size, image_height, image_width, num_channels = image.shape
+        kernel_height, kernel_width, kernel_channels, num_filters = kernel.shape
+        assert num_channels == kernel_channels, "Kernel channels must match image channels."
+        
+        padded_image = np.pad(image, ((0, 0), (padding, padding), (padding, padding), (0, 0)), mode="constant")
+        padded_image_height, padded_image_width = padded_image.shape[1:3]
 
-    
-    def max_pooling(self, x, pool_size=2):
-        batch_size, output_height, output_width, num_filters = x.shape
-        pooled_output = np.zeros((batch_size, output_height // pool_size, output_width // pool_size, num_filters))
-        for i in range(0, output_height, pool_size):
-            for j in range(0, output_width, pool_size):
-                pooled_output[:, i // pool_size, j // pool_size, :] = np.max(x[:, i:i + pool_size, j:j + pool_size, :], axis=(1, 2))
-        return pooled_output
+        output_height = (image_height + 2 * padding - kernel_height) // stride + 1
+        output_width = (image_width + 2 * padding - kernel_width) // stride + 1
 
-            
-    def flatten(self, x):
-        return x.reshape(x.shape[0], -1)
-    
-    def fully_layer(self, x, num_neurons):
-        self.weights = np.random.randn(x.shape[1], num_neurons) / np.sqrt(x.shape[1])
-        self.biases = np.zeros(num_neurons)
-        return np.dot(x, self.weights) + self.biases
-    
+        output = np.zeros((batch_size, output_height, output_width, num_filters))
 
-        
-    
-   
-    def forward_pass(self, input_image, num_neurons=1000):
-        batch_size, image_height, image_width, num_channels = input_image.shape
-        output_height = (image_height + 2 * self.padding - self.filter_size) // self.stride + 1
-        output_width = (image_width + 2 * self.padding - self.filter_size) // self.stride + 1
-        
-        padded_image = np.pad(input_image, ((0, 0), (self.padding, self.padding), (self.padding, self.padding), (0, 0)), 'constant')
-        output = np.zeros((batch_size, output_height, output_width, self.num_filters))
-        
-        # Convolution
-        for i in range(0, output_height):
-            for j in range(0, output_width):
-                patch = padded_image[:, i * self.stride:i * self.stride + self.filter_size, j * self.stride:j * self.stride + self.filter_size, :]
-                output[:, i, j, :] = np.sum(patch * self.filters, axis=(1, 2, 3)) + self.biases
-        
-        # Activation
-        output = self.activation(output)
-        
-        # Local Response Normalization
+        for i in range(output_height):
+            for j in range(output_width):
+                h_start = i * stride
+                h_end = h_start + kernel_height
+                w_start = j * stride
+                w_end = w_start + kernel_width
+
+                region = padded_image[:, h_start:h_end, w_start:w_end, :]
+                for f in range(num_filters):
+                    output[:, i, j, f] = np.sum(region * kernel[:, :, :, f], axis=(1, 2, 3)) + self.bias[f]
+
+        output = self.relu_activation(output)
         output = self.local_response_normalization(output)
-    
-    # Max Pooling
-        output = self.max_pooling(output, pool_size=2)
-        
-        # Flatten
-        self.flatten_output = self.flatten(output)
-        
-        # Fully Connected Layer
-        output = self.fully_layer(self.flatten_output, num_neurons)
-    
-    # Softmax
+        output = self.max_pooling(2, output)
+        output = self.flatten(output)
+        output = self.fully_connected_layer(output)
         output = self.softmax(output)
-        
+
         return output
 
-# backward pass up next ----> stay tuned for this part as it involves backpropagation and gradient descent.
 
-               
-    
+# Generate random data for testing
+np.random.seed(0)
+batch_size = 2
+image_height = 8
+image_width = 8
+num_channels = 3
+num_filters = 2
+filter_size = 3
+num_neurons = 10
+stride = 1
+padding = 1
+
+# Create random input image
+image = np.random.randn(batch_size, image_height, image_width, num_channels)
+kernel = np.random.randn(filter_size, filter_size, num_channels, num_filters)
+weight = np.random.randn((image_height // 2) * (image_width // 2) * num_filters, num_neurons)
+bias = np.random.randn(num_neurons)
+
+conv_layer = conv2d(weight=weight, bias=bias, num_filter=num_filters, filter_size=filter_size, neuron=num_neurons)
+output = conv_layer.forward_pass(image, kernel, stride, padding)
+
+# Print the output
+print("Output of forward pass:\n", output)
+print(output.shape)
